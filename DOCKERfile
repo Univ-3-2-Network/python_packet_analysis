@@ -26,8 +26,8 @@ COPY ./app/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY ./app /app
+# Use volume for application code (mount ./app at runtime)
+VOLUME ["/app"]
 
 # Run as non-root user for security (optional, uncomment if needed)
 # RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app

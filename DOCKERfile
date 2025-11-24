@@ -1,14 +1,30 @@
-FROM ubuntu:latest
+FROM python:3.11-slim
 
-RUN apt update -y
-RUN apt install -y python-pip python-dev build-essential
+# Install system dependencies required for scapy and network operations
+RUN apt-get update && apt-get install -y \
+    gcc \
+    libpcap-dev \
+    tcpdump \
+    iproute2 \
+    net-tools \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /app
-COPY . /app
+# Set working directory
 WORKDIR /app
 
-RUN pip install -r requirements.txt
+# Copy requirements first for better layer caching
+COPY ./app/requirements.txt /app/requirements.txt
 
-ENTRYPOINT [ "python" ]
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
+# Copy application code
+COPY ./app /app
+
+# Run as non-root user for security (optional, uncomment if needed)
+# RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+# USER appuser
+
+ENTRYPOINT ["python"]
 CMD ["app.py"]

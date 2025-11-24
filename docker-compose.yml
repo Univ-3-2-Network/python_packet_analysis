@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  py_cap:
+    build: .
+    container_name: py_cap
+    # Grant network capabilities required for packet sniffing
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    # Use host network mode for full network access (optional, but recommended for sniffing)
+    # Uncomment the line below to use host network mode
+    # network_mode: "host"
+
+    # If not using host mode, expose ports manually
+    ports:
+      - "5822:22"
+      # Add other ports as needed
+      # - "8080:8080"
+
+    # Keep container running
+    stdin_open: true
+    tty: true
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Optional: mount volumes for persistent data
+    volumes:
+      - ./app:/app
+      - ./captured_packets:/captured_packets
+
+    # Environment variables (optional)
+    environment:
+      - PYTHONUNBUFFERED=1

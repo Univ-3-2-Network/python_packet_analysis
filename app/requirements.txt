@@ -1,5 +1,7 @@
 # Network and Packet Capture
 scapy>=2.5.0
+# pcapy-ng>=1.0.9
+dnspython>=2.4.0
 
 # Network utilities
 netifaces>=0.11.0

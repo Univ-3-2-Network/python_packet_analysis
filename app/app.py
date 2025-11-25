@@ -8,7 +8,7 @@ import socket
 import time
 import threading
 from scapy.all import (
-    IP, TCP, ICMP, UDP, DNS, DNSQR,
+    IP, TCP, ICMP, UDP, DNS, DNSQR, DNSRR,
     sr1, send, sniff, conf, AsyncSniffer
 )
 
@@ -147,31 +147,82 @@ def nslookup_like(host, dns_server="8.8.8.8", timeout=3):
     print(f"Using DNS server: {dns_server}")
 
     try:
-        # Create DNS query
-        dns_query = IP(dst=dns_server)/UDP(dport=53, sport=54321)/DNS(rd=1, qd=DNSQR(qname=host))
+        # Start packet capture in background
+        bpf_filter = f"udp and host {dns_server} and port 53"
+        print(f"Starting sniffer with filter: {bpf_filter}")
+        sniffer = AsyncSniffer(filter=bpf_filter, prn=None, store=True)
+        sniffer.start()
 
-        # Send and receive
-        response = sr1(dns_query, timeout=timeout, verbose=0)
+        time.sleep(0.3)  # Let sniffer start
 
-        if response and response.haslayer(DNS):
-            dns_layer = response[DNS]
+        # Create DNS query using real UDP socket
+        import random
+        transaction_id = random.randint(1, 65535)
+
+        # Build DNS query packet
+        dns_query = DNS(id=transaction_id, rd=1, qd=DNSQR(qname=host))
+        query_bytes = bytes(dns_query)
+
+        # Send DNS query via UDP socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
+        sock.sendto(query_bytes, (dns_server, 53))
+        print(f"✓ DNS query sent (ID: {transaction_id})")
+
+        # Receive DNS response
+        try:
+            response_data, addr = sock.recvfrom(4096)
+            print(f"✓ DNS response received from {addr}")
+        except socket.timeout:
+            print("✗ Socket timeout - no response received")
+            sock.close()
+            sniffer.stop()
+            return
+
+        sock.close()
+        time.sleep(0.3)  # Wait for packets
+
+        # Stop sniffer and analyze packets
+        sniffer.stop()
+        packets = sniffer.results
+
+        print(f"\n--- Captured {len(packets)} UDP packets ---")
+
+        # Parse captured DNS packets
+        for pkt in packets:
+            if pkt.haslayer(UDP):
+                src_ip = pkt[IP].src
+                dst_ip = pkt[IP].dst
+                src_port = pkt[UDP].sport
+                dst_port = pkt[UDP].dport
+                print(f"  {src_ip}:{src_port} -> {dst_ip}:{dst_port} [UDP] Len={pkt[UDP].len}")
+
+        # Parse DNS response
+        dns_response = DNS(response_data)
+
+        if dns_response:
             print(f"\n--- DNS Response ---")
-            print(f"Transaction ID: {dns_layer.id}")
-            print(f"Questions: {dns_layer.qdcount}")
-            print(f"Answers: {dns_layer.ancount}")
+            print(f"Transaction ID: {dns_response.id}")
+            print(f"Questions: {dns_response.qdcount}")
+            print(f"Answers: {dns_response.ancount}")
 
             # Parse query section
-            if dns_layer.qd:
-                qname = dns_layer.qd.qname.decode('utf-8') if isinstance(dns_layer.qd.qname, bytes) else str(dns_layer.qd.qname)
+            if dns_response.qd:
+                qname = dns_response.qd.qname.decode('utf-8') if isinstance(dns_response.qd.qname, bytes) else str(dns_response.qd.qname)
                 print(f"Query: {qname}")
 
             # Parse answers
-            if dns_layer.ancount > 0:
+            if dns_response.ancount > 0:
                 print(f"\nAnswers:")
                 # Iterate through answer records properly
-                current = dns_layer.an
+                current = dns_response.an
                 count = 0
-                while current and count < dns_layer.ancount:
+                while current and count < dns_response.ancount:
+                    # Check if current is a DNS Resource Record  || # if not isinstance(current, DNSRR): <- old error if line
+                    if len(current) == 0:
+                        print(f"  [DEBUG] Skipping non-DNSRR: {type(current).__name__}")
+                        break
+
                     # Get record name
                     try:
                         rrname = current.rrname.decode('utf-8') if isinstance(current.rrname, bytes) else str(current.rrname)
@@ -197,13 +248,22 @@ def nslookup_like(host, dns_server="8.8.8.8", timeout=3):
 
                     print(f"  [{type_str}] {rrname} -> {rdata}")
 
-                    # Move to next record
-                    current = current.payload if hasattr(current, 'payload') else None
                     count += 1
+
+                    # Move to next record - check if payload is also a DNSRR
+                    if hasattr(current, 'payload') and current.payload:
+                        next_layer = current.payload
+                        if isinstance(next_layer, DNSRR):
+                            current = next_layer
+                        else:
+                            # No more DNS records
+                            break
+                    else:
+                        break
             else:
                 print("No answers found")
         else:
-            print("✗ No response (timeout)")
+            print("✗ Could not parse DNS response")
 
     except Exception as e:
         print(f"✗ Error: {e}")
@@ -267,10 +327,10 @@ def main():
     target = "example.com"
 
     # Run all utilities
-    curl_like(target, "/")
-    ping_like(target, count=4)
-    nslookup_like(target, dns_server="8.8.8.8")
-    traceroute_like(target, max_hops=15)
+    # curl_like(target, "/")
+    # ping_like(target, count=4)
+    nslookup_like(target, dns_server="1.1.1.1", timeout=10)
+    # traceroute_like(target, max_hops=15)
 
     print("\n" + "="*60)
     print("All tests completed")

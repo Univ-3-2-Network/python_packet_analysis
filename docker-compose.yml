@@ -1,8 +1,9 @@
-version: '3.8'
-
 services:
   py_cap:
-    build: .
+    build:
+      context: .
+      args:
+        - SSH_ROOT_PASSWORD=${SSH_ROOT_PASSWORD}
     container_name: py_cap
     # Grant network capabilities required for packet sniffing
     cap_add:
@@ -14,9 +15,8 @@ services:
 
     # If not using host mode, expose ports manually
     ports:
-      - "5822:22"
-      # Add other ports as needed
-      # - "8080:8080"
+      - "${SSH_PORT}:22"
+      - "${APP_PORT}:${APP_PORT}"
 
     # Keep container running
     stdin_open: true
@@ -28,8 +28,21 @@ services:
     # Optional: mount volumes for persistent data
     volumes:
       - ./app:/app
-      - ./captured_packets:/captured_packets
+      - ./captured_packets:${CAPTURED_PACKETS_DIR}
+      - ./logs:/app/logs
 
-    # Environment variables (optional)
+    # Environment variables from .env file
     environment:
       - PYTHONUNBUFFERED=1
+      - PYTHON_ENV=${PYTHON_ENV}
+      - APP_PORT=${APP_PORT}
+      - NETWORK_INTERFACE=${NETWORK_INTERFACE}
+      - CAPTURE_FILTER=${CAPTURE_FILTER}
+      - MAX_PACKETS=${MAX_PACKETS}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - LOG_FILE=${LOG_FILE}
+      - CAPTURED_PACKETS_DIR=${CAPTURED_PACKETS_DIR}
+
+    # Load environment variables from .env file
+    env_file:
+      - .env

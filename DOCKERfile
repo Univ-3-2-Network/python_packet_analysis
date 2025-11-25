@@ -1,5 +1,8 @@
 FROM python:3.11-slim
 
+# Build arguments from .env file
+ARG SSH_ROOT_PASSWORD=password
+
 # Install system dependencies required for scapy and network operations
 RUN apt-get update && apt-get install -y \
     gcc \
@@ -10,9 +13,9 @@ RUN apt-get update && apt-get install -y \
     openssh-server \
     && rm -rf /var/lib/apt/lists/*
 
-# Configure SSH
+# Configure SSH with password from build arg
 RUN mkdir -p /var/run/sshd && \
-    echo 'root:password' | chpasswd && \
+    echo "root:${SSH_ROOT_PASSWORD}" | chpasswd && \
     sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \
     sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
 

@@ -6,9 +6,10 @@ Implements: curl, ping, nslookup, traceroute with packet parsing
 
 import socket
 import time
+import threading
 from scapy.all import (
     IP, TCP, ICMP, UDP, DNS, DNSQR,
-    sr1, send, sniff, conf
+    sr1, send, sniff, conf, AsyncSniffer
 )
 
 
@@ -23,39 +24,75 @@ def curl_like(host, path="/", timeout=5):
         dest_ip = socket.gethostbyname(host)
         print(f"Connecting to {dest_ip}:80...")
 
-        # Create HTTP GET request
+        # Start packet capture in background
+        bpf_filter = f"tcp and host {dest_ip} and port 80"
+        sniffer = AsyncSniffer(filter=bpf_filter, prn=None, store=True)
+        sniffer.start()
+
+        time.sleep(0.5)  # Let sniffer start
+
+        # Create HTTP GET request using real socket
         http_request = f"GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
 
-        # Send SYN packet
-        ip = IP(dst=dest_ip)
-        syn = TCP(sport=12345, dport=80, flags="S", seq=1000)
-        syn_ack = sr1(ip/syn, timeout=timeout, verbose=0)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        sock.connect((dest_ip, 80))
+        sock.sendall(http_request.encode('utf-8'))
 
-        if syn_ack and syn_ack.haslayer(TCP):
-            print(f"✓ SYN-ACK received from {syn_ack[IP].src}:{syn_ack[TCP].sport}")
-            print(f"  Flags: {syn_ack[TCP].flags}, Seq: {syn_ack[TCP].seq}, Ack: {syn_ack[TCP].ack}")
+        print(f"✓ HTTP GET request sent")
 
-            # Send ACK
-            ack = TCP(sport=12345, dport=80, flags="A", seq=syn_ack[TCP].ack, ack=syn_ack[TCP].seq + 1)
-            send(ip/ack, verbose=0)
+        # Receive response
+        response = b""
+        while True:
+            try:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                response += chunk
+                if len(response) > 1024:  # Get first 1KB
+                    break
+            except socket.timeout:
+                break
 
-            # Send HTTP request
-            push = TCP(sport=12345, dport=80, flags="PA", seq=syn_ack[TCP].ack, ack=syn_ack[TCP].seq + 1)
-            send(ip/push/http_request, verbose=0)
-            print(f"✓ HTTP GET request sent")
+        sock.close()
+        time.sleep(0.5)  # Wait for packets
 
-            # Capture response
-            packets = sniff(filter=f"tcp and host {dest_ip} and port 80", count=5, timeout=3)
-            for pkt in packets:
-                if pkt.haslayer(TCP) and pkt[TCP].flags & 0x18:  # PSH-ACK
-                    if pkt.haslayer('Raw'):
-                        payload = pkt['Raw'].load.decode('utf-8', errors='ignore')
-                        if payload.startswith('HTTP'):
-                            print(f"\n--- HTTP Response ---")
-                            print(payload[:500])
-                            break
-        else:
-            print("✗ No response (timeout)")
+        # Stop sniffer and analyze packets
+        sniffer.stop()
+        packets = sniffer.results
+
+        print(f"\n--- Captured {len(packets)} TCP packets ---")
+
+        # Parse TCP handshake
+        for pkt in packets[:3]:
+            if pkt.haslayer(TCP):
+                tcp_flags = pkt[TCP].flags
+                src_ip = pkt[IP].src
+                dst_ip = pkt[IP].dst
+                src_port = pkt[TCP].sport
+                dst_port = pkt[TCP].dport
+
+                flag_str = str(tcp_flags)
+                print(f"  {src_ip}:{src_port} -> {dst_ip}:{dst_port} [{flag_str}] Seq={pkt[TCP].seq} Ack={pkt[TCP].ack}")
+
+        # Parse HTTP response payload
+        http_found = False
+        for pkt in packets:
+            if pkt.haslayer(TCP) and pkt.haslayer('Raw'):
+                payload = pkt['Raw'].load
+                try:
+                    text = payload.decode('utf-8', errors='ignore')
+                    if text.startswith('HTTP'):
+                        print(f"\n--- HTTP Response (from packet) ---")
+                        print(text[:500])
+                        http_found = True
+                        break
+                except:
+                    pass
+
+        if not http_found and response:
+            print(f"\n--- HTTP Response (from socket) ---")
+            print(response.decode('utf-8', errors='ignore')[:500])
 
     except Exception as e:
         print(f"✗ Error: {e}")
@@ -206,4 +243,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    while 1:
+        main()

@@ -6,9 +6,10 @@ Implements: curl, ping, nslookup, traceroute with packet parsing
 
 import socket
 import time
+import threading
 from scapy.all import (
     IP, TCP, ICMP, UDP, DNS, DNSQR,
-    sr1, send, sniff, conf
+    sr1, send, sniff, conf, AsyncSniffer
 )
 
 
@@ -43,9 +44,10 @@ def curl_like(host, path="/", timeout=5):
             push = TCP(sport=12345, dport=80, flags="PA", seq=syn_ack[TCP].ack, ack=syn_ack[TCP].seq + 1)
             send(ip/push/http_request, verbose=0)
             print(f"✓ HTTP GET request sent")
+            
 
             # Capture response
-            packets = sniff(filter=f"tcp and host {dest_ip} and port 80", count=5, timeout=3)
+            packets = sniff(filter=f"tcp and host {dest_ip} and port 80", count=10, timeout=5)
             for pkt in packets:
                 if pkt.haslayer(TCP) and pkt[TCP].flags & 0x18:  # PSH-ACK
                     if pkt.haslayer('Raw'):
@@ -206,4 +208,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    while 1:
+        main()

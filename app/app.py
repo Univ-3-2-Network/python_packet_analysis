@@ -148,7 +148,7 @@ def nslookup_like(host, dns_server="8.8.8.8", timeout=3):
 
     try:
         # Create DNS query
-        dns_query = IP(dst=dns_server)/UDP(dport=53)/DNS(rd=1, qd=DNSQR(qname=host))
+        dns_query = IP(dst=dns_server)/UDP(dport=53, sport=54321)/DNS(rd=1, qd=DNSQR(qname=host))
 
         # Send and receive
         response = sr1(dns_query, timeout=timeout, verbose=0)
@@ -160,13 +160,46 @@ def nslookup_like(host, dns_server="8.8.8.8", timeout=3):
             print(f"Questions: {dns_layer.qdcount}")
             print(f"Answers: {dns_layer.ancount}")
 
+            # Parse query section
+            if dns_layer.qd:
+                qname = dns_layer.qd.qname.decode('utf-8') if isinstance(dns_layer.qd.qname, bytes) else str(dns_layer.qd.qname)
+                print(f"Query: {qname}")
+
             # Parse answers
             if dns_layer.ancount > 0:
                 print(f"\nAnswers:")
-                for i in range(dns_layer.ancount):
-                    answer = dns_layer.an[i]
-                    if hasattr(answer, 'rdata'):
-                        print(f"  {answer.rrname.decode('utf-8')} -> {answer.rdata}")
+                # Iterate through answer records properly
+                current = dns_layer.an
+                count = 0
+                while current and count < dns_layer.ancount:
+                    # Get record name
+                    try:
+                        rrname = current.rrname.decode('utf-8') if isinstance(current.rrname, bytes) else str(current.rrname)
+                    except:
+                        rrname = str(current.rrname)
+
+                    # Get record data based on type
+                    if hasattr(current, 'rdata'):
+                        rdata = current.rdata
+                    elif hasattr(current, 'address'):  # A record
+                        rdata = current.address
+                    elif hasattr(current, 'exchange'):  # MX record
+                        rdata = current.exchange
+                    elif hasattr(current, 'target'):  # SRV/CNAME record
+                        rdata = current.target
+                    else:
+                        rdata = "N/A"
+
+                    # Get record type
+                    rtype = current.type if hasattr(current, 'type') else 1
+                    type_names = {1: 'A', 2: 'NS', 5: 'CNAME', 15: 'MX', 28: 'AAAA'}
+                    type_str = type_names.get(rtype, str(rtype))
+
+                    print(f"  [{type_str}] {rrname} -> {rdata}")
+
+                    # Move to next record
+                    current = current.payload if hasattr(current, 'payload') else None
+                    count += 1
             else:
                 print("No answers found")
         else:
@@ -174,6 +207,8 @@ def nslookup_like(host, dns_server="8.8.8.8", timeout=3):
 
     except Exception as e:
         print(f"✗ Error: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def traceroute_like(host, max_hops=30, timeout=2):

@@ -269,7 +269,7 @@ def main():
     # Run all utilities
     curl_like(target, "/")
     ping_like(target, count=4)
-    nslookup_like(target)
+    nslookup_like(target, dns_server="8.8.8.8")
     traceroute_like(target, max_hops=15)
 
     print("\n" + "="*60)

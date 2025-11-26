@@ -544,7 +544,8 @@ if __name__ == "__main__":
 
     # Disable scapy verbose output
     conf.verb = 0
-
+    conf.iface = "eth0"
+    
     # 도메인 IP 동적 확인 (Resolve)
     try:
         WEB_IP = socket.gethostbyname(WEB_DOMAIN)

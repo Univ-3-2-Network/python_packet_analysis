@@ -4,13 +4,12 @@ Network utility tools using Scapy with Terminal UML Visualization
 Target: www.google.com (Web)
 """
 
-import sys
 import socket
 import time
 import os
 import sys
 from scapy.all import (
-    IP, TCP, ICMP, UDP, DNS, DNSQR,
+    IP, TCP, ICMP, UDP, DNS, DNSQR, DNSRR, Raw,
     sr1, AsyncSniffer, conf
 )
 
@@ -20,7 +19,7 @@ from scapy.all import (
 class TerminalUML:
     def __init__(self):
         self.events = []
-        # 다이어그램에 표시할 노드들 정의 (Linux 제거)
+        # 다이어그램에 표시할 노드들 정의
         self.nodes = ["Client", "DNS", "Router", "Web"]
         self.node_positions = {name: i * 20 for i, name in enumerate(self.nodes)}
         
@@ -48,21 +47,21 @@ class TerminalUML:
         src = self.get_node_name(src_ip)
         dst = self.get_node_name(dst_ip)
         self.events.append((src, dst, description))
-    
+
     def clear(self):
         """이벤트 목록 초기화 (다음 다이어그램을 위해)"""
         self.events = []
 
-    def draw(self):
+    def draw(self, title="Sequence Diagram"):
         print("\n" + "="*80)
-        print("Network Sequence Diagram (ASCII Visualization)")
+        print(f"ASCII Visualization: {title}")
         print("="*80 + "\n")
 
         if not self.events:
             print("No events captured.")
             print("="*80)
             return
-        
+
         # 1. 헤더 출력
         header = ""
         for node in self.nodes:
@@ -139,13 +138,13 @@ def nslookup_like(host, dns_server="8.8.8.8", timeout=3):
             dns_layer = response[DNS]
             uml.add_event(dns_server, uml.local_ip, f"DNS Resp: {dns_layer.ancount} Answers")
             
-            print(f"\n--- DNS Response ---")
-            print(f"Transaction ID: {dns_layer.id}")
+            print(f"\n>>> Packet Analysis (DNS Response) <<<")
+            print(f"Transaction ID: {dns_layer.id} (Hex: {hex(dns_layer.id)})")
             print(f"Flags: QR={dns_layer.qr} (Response), AA={dns_layer.aa} (Authoritative), RD={dns_layer.rd} (Recursion Desired)")
             print(f"Question: {dns_layer.qd.qname.decode('utf-8')} (Type: {dns_layer.qd.qtype})")
             
             if dns_layer.ancount > 0:
-                print(f"Answers:")
+                print(f"Answers ({dns_layer.ancount}):")
                 for i in range(dns_layer.ancount):
                     answer = dns_layer.an[i]
                     # DNSRR 필드 해석
@@ -165,14 +164,14 @@ def nslookup_like(host, dns_server="8.8.8.8", timeout=3):
 
 def curl_like(target_ip, host_domain, path="/", timeout=5):
     """
-    HTTP GET request
+    HTTP GET request with HTML content inspection
     """
     print(f"\n[CURL] GET http://{host_domain}{path} (IP: {target_ip})")
 
     try:
         # Start packet capture in background
         bpf_filter = f"tcp and host {target_ip} and port 80"
-        sniffer = AsyncSniffer(filter=bpf_filter, count=10, timeout=5)
+        sniffer = AsyncSniffer(filter=bpf_filter, count=15, timeout=5)
         sniffer.start()
 
         time.sleep(0.5)  # Let sniffer start
@@ -194,7 +193,8 @@ def curl_like(target_ip, host_domain, path="/", timeout=5):
                 chunk = sock.recv(4096)
                 if not chunk: break
                 response += chunk
-                if len(response) > 1024: break
+                # 너무 길면 끊기 (분석용)
+                if len(response) > 4096: break
             except socket.timeout:
                 break
 
@@ -206,7 +206,27 @@ def curl_like(target_ip, host_domain, path="/", timeout=5):
             sniffer.stop()
         packets = sniffer.results
 
-        print(f"\n--- Captured {len(packets)} TCP packets ---")
+        # Payload Analysis (HTML Content)
+        print(f"\n>>> Packet Analysis (HTTP Content) <<<")
+        if response:
+            try:
+                # 헤더와 바디 분리 시도
+                decoded_resp = response.decode('utf-8', errors='ignore')
+                headers, _, body = decoded_resp.partition('\r\n\r\n')
+                
+                print("[HTTP Headers]")
+                print('\n'.join(headers.splitlines()[:5])) # 상위 5줄만 출력
+                print("...")
+                
+                print(f"\n[HTTP Body / HTML Content] (Length: {len(body)} bytes)")
+                preview = body.strip().replace('\n', ' ')[:200]
+                print(f"Content Preview: {preview}...")
+            except Exception as e:
+                print(f"Could not parse HTTP response: {e}")
+        else:
+            print("No data received from socket.")
+
+        print(f"\n--- Captured {len(packets)} TCP packets for UML ---")
 
         # Parse packets for UML and Display
         for pkt in packets:
@@ -220,65 +240,9 @@ def curl_like(target_ip, host_domain, path="/", timeout=5):
                 if pkt.haslayer('Raw'):
                     payload = bytes(pkt['Raw'].load).decode('utf-8', errors='ignore')
                     if "GET" in payload: msg = "HTTP GET"
-                    if "HTTP/1" in payload: msg = "HTTP 200 OK"
+                    if "HTTP/1" in payload: msg = "HTTP Resp"
                 
                 uml.add_event(src, dst, msg)
-
-                # Console Print
-                print(f"  {src}:{pkt[TCP].sport} -> {dst}:{pkt[TCP].dport} [{flags}]")
-
-        # Print HTTP Response Payload text
-        for pkt in packets:
-            if pkt.haslayer(TCP) and pkt.haslayer('Raw'):
-                payload = pkt['Raw'].load
-                try:
-                    text = payload.decode('utf-8', errors='ignore')
-                    if text.startswith('HTTP'):
-                        print(f"\n--- HTTP Response (from packet) ---")
-
-                        # Parse HTTP status line and headers
-                        lines = text.split('\r\n')
-
-                        # Parse status line (HTTP/1.1 200 OK)
-                        if lines:
-                            status_line = lines[0]
-                            parts = status_line.split(' ', 2)
-                            if len(parts) >= 3:
-                                http_version = parts[0]
-                                status_code = parts[1]
-                                status_message = parts[2]
-                                print(f"Status: {http_version} {status_code} {status_message}")
-                            else:
-                                print(f"Status: {status_line}")
-
-                        # Parse important headers
-                        print(f"\nHeaders:")
-                        for line in lines[1:]:
-                            if not line:  # Empty line marks end of headers
-                                break
-                            if ':' in line:
-                                header_name, header_value = line.split(':', 1)
-                                header_name = header_name.strip()
-                                header_value = header_value.strip()
-                                # Show important headers
-                                if header_name.lower() in ['content-type', 'content-length', 'server', 'date', 'connection', 'transfer-encoding']:
-                                    print(f"  {header_name}: {header_value}")
-
-                        # Show packet info
-                        print(f"\nPacket Info:")
-                        print(f"  Payload size: {len(payload)} bytes")
-
-                        # Show body preview
-                        body_start = text.find('\r\n\r\n')
-                        if body_start != -1 and body_start + 4 < len(text):
-                            body = text[body_start + 4:]
-                            print(f"\nBody Preview (first 200 chars):")
-                            print(body[:500])
-
-                        http_found = True
-                        break
-                except:
-                    pass
 
     except Exception as e:
         print(f"✗ Error: {e}")
@@ -382,9 +346,8 @@ def traceroute_like(target_ip, max_hops=15, timeout=2):
         print(f"✗ Error: {e}")
 
 
-if __name__ == "__main__":
+def main():
     # 0. 관리자 권한 체크 및 자동 재실행
-
     if os.geteuid() != 0:
         print("\n" + "="*60)
         print("[알림] 관리자 권한(Root)이 필요합니다.")
@@ -403,13 +366,10 @@ if __name__ == "__main__":
     # Disable scapy verbose output
     conf.verb = 0
 
-    # set WEB_DOMAIN from ARG
-    if len(sys.argv) > 1:
-        WEB_DOMAIN = sys.argv[1]
-    else:
-        WEB_DOMAIN = "google.co.kr"
+    # 구글 타겟 정의
+    WEB_DOMAIN = "www.google.com"
     
- # 도메인 IP 동적 확인 (Resolve)
+    # 도메인 IP 동적 확인 (Resolve)
     try:
         WEB_IP = socket.gethostbyname(WEB_DOMAIN)
         print(f"[*] Resolved {WEB_DOMAIN} to {WEB_IP}")
@@ -445,3 +405,7 @@ if __name__ == "__main__":
     print("\n" + "="*60)
     print("All tests completed")
     print("="*60)
+
+
+if __name__ == "__main__":
+    main()

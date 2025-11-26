@@ -429,7 +429,7 @@ def traceroute_like(target_ip, max_hops=15, timeout=2):
     # Show local IP for debugging
     print(f"Local IP: {uml.local_ip}")
     print(f"Target IP: {target_ip}")
-    print(f"\nNote: If you only see 1-2 hops, enable 'network_mode: host' in docker-compose.yml")
+    # print(f"\nNote: If you only see 1-2 hops, enable 'network_mode: host' in docker-compose.yml")
     print("=" * 80)
 
     try:

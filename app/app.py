@@ -131,15 +131,15 @@ def nslookup_like(host, dns_server="8.8.8.8", timeout=3):
     try:
         # Create DNS query
         dns_query = IP(dst=dns_server)/UDP(dport=53)/DNS(rd=1, qd=DNSQR(qname=host))
-        
-        uml.add_event(uml.local_ip, dns_server, f"DNS Query: {host}")
+
+        uml.add_event(uml.local_ip, dns_server, f"DNS Query :53 [{host}]")
 
         # Send and receive
         response = sr1(dns_query, timeout=timeout, verbose=0)
 
         if response and response.haslayer(DNS):
             dns_layer = response[DNS]
-            uml.add_event(dns_server, uml.local_ip, f"DNS Resp: {dns_layer.ancount} Answers")
+            uml.add_event(dns_server, uml.local_ip, f"DNS Resp :53 [{dns_layer.ancount} ans]")
             
             print(f"\n--- DNS Response ---")
             print(f"Transaction ID: {dns_layer.id}")
@@ -194,7 +194,7 @@ def nslookup_like(host, dns_server="8.8.8.8", timeout=3):
                 print("No answers found")
         else:
             print("✗ No response (timeout)")
-            uml.add_event(dns_server, uml.local_ip, "Timeout")
+            uml.add_event(dns_server, uml.local_ip, "DNS Timeout [no reply]")
 
     except Exception as e:
         print(f"✗ Error: {e}")
@@ -251,14 +251,16 @@ def curl_like(target_ip, host_domain, path="/", timeout=5):
                 src = pkt[IP].src
                 dst = pkt[IP].dst
                 flags = pkt[TCP].flags
-                
+                sport = pkt[TCP].sport
+                dport = pkt[TCP].dport
+
                 # UML Logging
-                msg = f"TCP [{flags}]"
+                msg = f"TCP :{dport} [{flags}]"
                 if pkt.haslayer('Raw'):
                     payload = bytes(pkt['Raw'].load).decode('utf-8', errors='ignore')
-                    if "GET" in payload: msg = "HTTP GET"
-                    if "HTTP/1" in payload: msg = "HTTP 200 OK"
-                
+                    if "GET" in payload: msg = f"HTTP GET :{dport}"
+                    if "HTTP/1" in payload: msg = f"HTTP 200 :{sport}"
+
                 uml.add_event(src, dst, msg)
 
                 # Console Print
@@ -338,8 +340,8 @@ def ping_like(target_ip, count=2, timeout=2):
             # Create ICMP echo request with payload
             packet = IP(dst=target_ip)/ICMP(id=1234, seq=i)/Raw(load=custom_payload)
             start_time = time.time()
-            
-            uml.add_event(uml.local_ip, target_ip, f"ICMP Req seq={i}")
+
+            uml.add_event(uml.local_ip, target_ip, f"ICMP Echo Req [seq={i}]")
 
             # Send and receive
             reply = sr1(packet, timeout=timeout, verbose=0)
@@ -347,7 +349,7 @@ def ping_like(target_ip, count=2, timeout=2):
             if reply:
                 rtt = (time.time() - start_time) * 1000
                 received += 1
-                uml.add_event(target_ip, uml.local_ip, f"ICMP Reply ttl={reply.ttl}")
+                uml.add_event(target_ip, uml.local_ip, f"ICMP Echo Reply [ttl={reply.ttl}]")
                 
                 print(f"Reply from {reply[IP].src}: icmp_seq={i} ttl={reply[IP].ttl} time={rtt:.2f}ms")
                 
@@ -360,7 +362,7 @@ def ping_like(target_ip, count=2, timeout=2):
                     else:
                         print("  >>> (Integrity Check: MISMATCH)")
             else:
-                uml.add_event(target_ip, uml.local_ip, "Timeout")
+                uml.add_event(target_ip, uml.local_ip, f"ICMP Timeout [seq={i}]")
                 print(f"Request timeout for icmp_seq={i}")
 
             sent += 1
@@ -386,11 +388,12 @@ def traceroute_like(target_ip, max_hops=15, timeout=2):
         for ttl in range(1, max_hops + 1):
             # KEY POINT: All packets go to same destination (target_ip)
             # But each has different TTL - routers along path send back ICMP errors
-            packet = IP(dst=target_ip, ttl=ttl)/UDP(dport=dest_port + ttl)
+            current_port = dest_port + ttl
+            packet = IP(dst=target_ip, ttl=ttl)/UDP(dport=current_port)
 
             start_time = time.time()
 
-            uml.add_event(uml.local_ip, "Router", f"UDP Probe TTL={ttl}")
+            uml.add_event(uml.local_ip, "Router", f"UDP :{current_port} [TTL={ttl}]")
 
             # Send packet and wait for ICMP Time Exceeded or Port Unreachable
             reply = sr1(packet, timeout=timeout, verbose=0)
@@ -419,7 +422,7 @@ def traceroute_like(target_ip, max_hops=15, timeout=2):
 
                     if icmp_type == 11:  # Time Exceeded
                         print(f"  [ICMP Type 11: TTL Exceeded]")
-                        uml.add_event(src_ip, uml.local_ip, f"Time Exceeded TTL={ttl}")
+                        uml.add_event(src_ip, uml.local_ip, f"ICMP Time Exceeded [TTL={ttl}]")
 
                         # Analyze original packet inside ICMP error message
                         print(f"     >>> Packet Analysis:")
@@ -433,27 +436,27 @@ def traceroute_like(target_ip, max_hops=15, timeout=2):
                     elif icmp_type == 3:  # Destination Unreachable
                         if icmp_code == 3:  # Port Unreachable = destination reached!
                             print(f"  [ICMP Type 3 Code 3: Port Unreachable - DESTINATION REACHED!]")
-                            uml.add_event(src_ip, uml.local_ip, "Port Unreachable (Reached)")
+                            uml.add_event(src_ip, uml.local_ip, f"ICMP Port Unreach :{current_port} [OK!]")
                             print(f"     >>> This means we successfully reached the destination server!")
                             print(f"\n✓ Reached destination in {ttl} hops")
                             reached = True
                             break
                         else:
                             print(f"  [ICMP Type 3 Code {icmp_code}: Dest Unreachable]")
-                            uml.add_event(src_ip, uml.local_ip, f"Dest Unreachable ({icmp_code})")
+                            uml.add_event(src_ip, uml.local_ip, f"ICMP Dest Unreach [code={icmp_code}]")
 
                     elif icmp_type == 0:  # Echo Reply (if ICMP was used instead)
                         print(f"  [ICMP Type 0: Echo Reply - DESTINATION REACHED!]")
-                        uml.add_event(src_ip, uml.local_ip, "Echo Reply (Reached)")
+                        uml.add_event(src_ip, uml.local_ip, "ICMP Echo Reply [Reached]")
                         print(f"\n✓ Reached destination in {ttl} hops")
                         reached = True
                         break
                     else:
                         print(f"  [ICMP Type {icmp_type} Code {icmp_code}]")
-                        uml.add_event(src_ip, uml.local_ip, f"ICMP {icmp_type}/{icmp_code}")
+                        uml.add_event(src_ip, uml.local_ip, f"ICMP Type={icmp_type}/Code={icmp_code}")
                 else:
                     print(f"  [Non-ICMP response]")
-                    uml.add_event(src_ip, uml.local_ip, f"Response TTL={ttl}")
+                    uml.add_event(src_ip, uml.local_ip, f"Response [TTL={ttl}]")
 
         if not reached:
             print(f"\n⚠ Did not reach destination within {max_hops} hops")

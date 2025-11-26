@@ -332,13 +332,13 @@ def main():
     # Disable scapy verbose output
     conf.verb = 0
 
-    target = "example.com"
+    target = "google.com"
 
     # Run all utilities
     # curl_like(target, "/")
     # ping_like(target, count=4)
-    nslookup_like(target, dns_server="1.1.1.1", timeout=10)
-    # traceroute_like(target, max_hops=15)
+    # nslookup_like(target, dns_server="1.1.1.1", timeout=10)
+    traceroute_like(target, max_hops=15)
 
     print("\n" + "="*60)
     print("All tests completed")
@@ -346,5 +346,5 @@ def main():
 
 
 if __name__ == "__main__":
-    while 1:
-        main()
+ 
+    main()

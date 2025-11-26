@@ -85,7 +85,48 @@ def curl_like(host, path="/", timeout=5):
                     text = payload.decode('utf-8', errors='ignore')
                     if text.startswith('HTTP'):
                         print(f"\n--- HTTP Response (from packet) ---")
-                        print(text[:500])
+
+                        # Parse HTTP status line and headers
+                        lines = text.split('\r\n')
+
+                        # Parse status line (HTTP/1.1 200 OK)
+                        if lines:
+                            status_line = lines[0]
+                            parts = status_line.split(' ', 2)
+                            if len(parts) >= 3:
+                                http_version = parts[0]
+                                status_code = parts[1]
+                                status_message = parts[2]
+                                print(f"Status: {http_version} {status_code} {status_message}")
+                            else:
+                                print(f"Status: {status_line}")
+
+                        # Parse important headers
+                        print(f"\nHeaders:")
+                        for line in lines[1:]:
+                            if not line:  # Empty line marks end of headers
+                                break
+                            if ':' in line:
+                                header_name, header_value = line.split(':', 1)
+                                header_name = header_name.strip()
+                                header_value = header_value.strip()
+                                # Show important headers
+                                if header_name.lower() in ['content-type', 'content-length', 'server', 'date', 'connection', 'transfer-encoding']:
+                                    print(f"  {header_name}: {header_value}")
+
+                        # Show packet info
+                        print(f"\nPacket Info:")
+                        print(f"  {pkt[IP].src}:{pkt[TCP].sport} -> {pkt[IP].dst}:{pkt[TCP].dport}")
+                        print(f"  TCP Seq={pkt[TCP].seq} Ack={pkt[TCP].ack} Flags=[{pkt[TCP].flags}]")
+                        print(f"  Payload size: {len(payload)} bytes")
+
+                        # Show body preview
+                        body_start = text.find('\r\n\r\n')
+                        if body_start != -1 and body_start + 4 < len(text):
+                            body = text[body_start + 4:]
+                            print(f"\nBody Preview (first 200 chars):")
+                            print(body[:500])
+
                         http_found = True
                         break
                 except:
@@ -93,7 +134,39 @@ def curl_like(host, path="/", timeout=5):
 
         if not http_found and response:
             print(f"\n--- HTTP Response (from socket) ---")
-            print(response.decode('utf-8', errors='ignore')[:500])
+            text = response.decode('utf-8', errors='ignore')
+            lines = text.split('\r\n')
+
+            # Parse status line
+            if lines:
+                status_line = lines[0]
+                parts = status_line.split(' ', 2)
+                if len(parts) >= 3:
+                    http_version = parts[0]
+                    status_code = parts[1]
+                    status_message = parts[2]
+                    print(f"Status: {http_version} {status_code} {status_message}")
+                else:
+                    print(f"Status: {status_line}")
+
+            # Parse headers
+            print(f"\nHeaders:")
+            for line in lines[1:]:
+                if not line:
+                    break
+                if ':' in line:
+                    header_name, header_value = line.split(':', 1)
+                    header_name = header_name.strip()
+                    header_value = header_value.strip()
+                    if header_name.lower() in ['content-type', 'content-length', 'server', 'date', 'connection', 'transfer-encoding']:
+                        print(f"  {header_name}: {header_value}")
+
+            # Show body preview
+            body_start = text.find('\r\n\r\n')
+            if body_start != -1 and body_start + 4 < len(text):
+                body = text[body_start + 4:]
+                print(f"\nBody Preview (first 200 chars):")
+                print(body[:200])
 
     except Exception as e:
         print(f"✗ Error: {e}")

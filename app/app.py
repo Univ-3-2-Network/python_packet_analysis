@@ -436,24 +436,36 @@ def traceroute_like(target_ip, max_hops=15, timeout=3):
     try:
         dest_port = 33434  # Standard traceroute starting port
         reached = False
+        timeout_count = 0
 
         for ttl in range(1, max_hops + 1):
-            # KEY POINT: All packets go to same destination (target_ip)
-            # But each has different TTL - routers along path send back ICMP errors
-            current_port = dest_port + ttl
-            packet = IP(dst=target_ip, ttl=ttl)/UDP(dport=current_port)
+            # Try ICMP first (more compatible with Windows), then UDP as fallback
+            # ICMP Echo Request with TTL
+            packet = IP(dst=target_ip, ttl=ttl)/ICMP()
 
             start_time = time.time()
 
-            uml.add_event(uml.local_ip, "Router", f"UDP :{current_port} [TTL={ttl}]")
+            uml.add_event(uml.local_ip, "Router", f"ICMP Echo [TTL={ttl}]")
 
-            # Send packet and wait for ICMP Time Exceeded or Port Unreachable
+            # Send packet and wait for ICMP Time Exceeded or Echo Reply
             reply = sr1(packet, timeout=timeout, verbose=0)
 
             rtt = (time.time() - start_time) * 1000
 
             if reply is None:
+                timeout_count += 1
                 print(f"{ttl:2d}  * * * (Request timeout)")
+
+                # If first 3 hops timeout, likely a network/permission issue
+                if ttl <= 3 and timeout_count == ttl:
+                    print(f"\n[!] Warning: All first {ttl} hop(s) timed out.")
+                    print(f"[!] Possible issues:")
+                    print(f"    - Firewall blocking ICMP")
+                    print(f"    - Network interface not accessible")
+                    print(f"    - Requires administrator/root privileges")
+                    if ttl == 3:
+                        print(f"    - On Windows: Ensure Npcap is installed")
+                        print(f"    - Try running container with: docker-compose down && docker-compose up")
             else:
                 src_ip = reply[IP].src
 
@@ -482,13 +494,13 @@ def traceroute_like(target_ip, max_hops=15, timeout=3):
                             original_ip = icmp_layer.payload
                             if isinstance(original_ip, IP):
                                 print(f"     [Original Packet] Src: {original_ip.src} -> Dst: {original_ip.dst}, TTL: {original_ip.ttl}")
-                                if original_ip.haslayer(UDP):
-                                    print(f"     [Original UDP] Port: {original_ip[UDP].dport}")
+                                if original_ip.haslayer(ICMP):
+                                    print(f"     [Original ICMP] Type: {original_ip[ICMP].type}")
 
                     elif icmp_type == 3:  # Destination Unreachable
                         if icmp_code == 3:  # Port Unreachable = destination reached!
                             print(f"  [ICMP Type 3 Code 3: Port Unreachable - DESTINATION REACHED!]")
-                            uml.add_event(src_ip, uml.local_ip, f"ICMP Port Unreach :{current_port} [OK!]")
+                            uml.add_event(src_ip, uml.local_ip, f"ICMP Port Unreach [OK!]")
                             print(f"     >>> This means we successfully reached the destination server!")
                             print(f"\n✓ Reached destination in {ttl} hops")
                             reached = True
@@ -497,9 +509,10 @@ def traceroute_like(target_ip, max_hops=15, timeout=3):
                             print(f"  [ICMP Type 3 Code {icmp_code}: Dest Unreachable]")
                             uml.add_event(src_ip, uml.local_ip, f"ICMP Dest Unreach [code={icmp_code}]")
 
-                    elif icmp_type == 0:  # Echo Reply (if ICMP was used instead)
+                    elif icmp_type == 0:  # Echo Reply
                         print(f"  [ICMP Type 0: Echo Reply - DESTINATION REACHED!]")
                         uml.add_event(src_ip, uml.local_ip, "ICMP Echo Reply [Reached]")
+                        print(f"     >>> Successfully received Echo Reply from destination!")
                         print(f"\n✓ Reached destination in {ttl} hops")
                         reached = True
                         break
@@ -510,9 +523,25 @@ def traceroute_like(target_ip, max_hops=15, timeout=3):
                     print(f"  [Non-ICMP response]")
                     uml.add_event(src_ip, uml.local_ip, f"Response [TTL={ttl}]")
 
+                # Reset timeout counter on successful response
+                timeout_count = 0
+
         if not reached:
             print(f"\n⚠ Did not reach destination within {max_hops} hops")
             print(f"   (This is normal - some servers don't respond to traceroute)")
+
+        # Final diagnostics
+        if timeout_count >= max_hops:
+            print(f"\n[!] DIAGNOSTIC: All {max_hops} hops timed out!")
+            print(f"[!] This indicates a serious network/permission issue:")
+            print(f"    1. Check if running with root/administrator privileges")
+            print(f"    2. On Windows: Ensure Npcap is installed (https://npcap.com)")
+            print(f"    3. Check firewall settings (allow ICMP)")
+            print(f"    4. Verify network interface: {conf.iface}")
+            print(f"    5. Try: docker-compose down && docker-compose up --build")
+        elif timeout_count > max_hops // 2:
+            print(f"\n[!] Warning: {timeout_count}/{max_hops} hops timed out")
+            print(f"[!] Network may be unstable or blocking ICMP selectively")
 
     except Exception as e:
         print(f"✗ Error: {e}")

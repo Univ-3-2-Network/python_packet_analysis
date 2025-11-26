@@ -527,16 +527,16 @@ if __name__ == "__main__":
         WEB_DOMAIN = "google.co.kr"
     
     # 0. 관리자 권한 체크 및 자동 재실행
-    if os.geteuid() != 0:
-        print("\n" + "="*60)
-        print("[알림] 관리자 권한(Root)이 필요합니다.")
-        print("비밀번호를 입력하면 자동으로 sudo 권한으로 재실행합니다...")
-        print("="*60 + "\n")
-        try:
-            os.execvp("sudo", ["sudo", sys.executable] + sys.argv)
-        except Exception as e:
-            print(f"[오류] 재실행 실패: {e}")
-            sys.exit(1)
+    # if os.geteuid() != 0:
+    #     print("\n" + "="*60)
+    #     print("[알림] 관리자 권한(Root)이 필요합니다.")
+    #     print("비밀번호를 입력하면 자동으로 sudo 권한으로 재실행합니다...")
+    #     print("="*60 + "\n")
+    #     try:
+    #         os.execvp("sudo", ["sudo", sys.executable] + sys.argv)
+    #     except Exception as e:
+    #         print(f"[오류] 재실행 실패: {e}")
+    #         sys.exit(1)
 
     print("="*60)
     print(f"Network Utility Tools (Scapy) - Target: {WEB_DOMAIN}")
@@ -544,8 +544,19 @@ if __name__ == "__main__":
 
     # Disable scapy verbose output
     conf.verb = 0
-    conf.iface = "eth0"
-    
+
+    # Auto-detect network interface (critical for host network mode)
+    try:
+        from scapy.arch import get_if_list, get_working_if
+        available_ifaces = get_if_list()
+        default_iface = get_working_if()
+        print(f"[*] Available network interfaces: {available_ifaces}")
+        print(f"[*] Using interface: {default_iface}")
+        conf.iface = default_iface
+    except Exception as e:
+        print(f"[!] Warning: Could not auto-detect interface: {e}")
+        print(f"[!] Scapy will use default interface")
+
     # 도메인 IP 동적 확인 (Resolve)
     try:
         WEB_IP = socket.gethostbyname(WEB_DOMAIN)

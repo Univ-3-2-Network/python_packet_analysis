@@ -10,7 +10,7 @@ import time
 import os
 import sys
 from scapy.all import (
-    IP, TCP, ICMP, UDP, DNS, DNSQR,
+    IP, TCP, ICMP, UDP, DNS, DNSQR, DNSRR, Raw,
     sr1, AsyncSniffer, conf
 )
 
@@ -53,15 +53,17 @@ class TerminalUML:
         """이벤트 목록 초기화 (다음 다이어그램을 위해)"""
         self.events = []
 
-    def draw(self):
+
+    def draw(self, title="Sequence Diagram"):
         print("\n" + "="*80)
-        print("Network Sequence Diagram (ASCII Visualization)")
+        print(f"ASCII Visualization: {title}")
         print("="*80 + "\n")
 
         if not self.events:
             print("No events captured.")
             print("="*80)
             return
+
         
         # 1. 헤더 출력
         header = ""
@@ -145,14 +147,49 @@ def nslookup_like(host, dns_server="8.8.8.8", timeout=3):
             print(f"Question: {dns_layer.qd.qname.decode('utf-8')} (Type: {dns_layer.qd.qtype})")
             
             if dns_layer.ancount > 0:
-                print(f"Answers:")
-                for i in range(dns_layer.ancount):
-                    answer = dns_layer.an[i]
-                    # DNSRR 필드 해석
-                    if isinstance(answer, DNSRR):
-                        rrname = answer.rrname.decode('utf-8')
-                        type_str = "A" if answer.type == 1 else str(answer.type)
-                        print(f"  [{i+1}] {rrname} -> {answer.rdata} (Type: {type_str}, TTL: {answer.ttl})")
+                print(f"Answers ({dns_layer.ancount} records):")
+
+                # Robust multiple answer parsing using payload chain
+                current = dns_layer.an
+                count = 0
+                while current and count < dns_layer.ancount:
+                    # Check if current layer has DNS RR attributes
+                    if not hasattr(current, 'rrname') or not hasattr(current, 'type'):
+                        # Skip non-DNSRR layers
+                        if hasattr(current, 'payload') and current.payload:
+                            current = current.payload
+                            continue
+                        else:
+                            break
+
+                    # Parse DNS record
+                    rrname = current.rrname.decode('utf-8') if isinstance(current.rrname, bytes) else str(current.rrname)
+
+                    # Get record data
+                    if hasattr(current, 'rdata'):
+                        rdata = current.rdata
+                    elif hasattr(current, 'address'):
+                        rdata = current.address
+                    else:
+                        rdata = "N/A"
+
+                    # Get type name
+                    type_names = {1: 'A', 2: 'NS', 5: 'CNAME', 15: 'MX', 28: 'AAAA'}
+                    type_str = type_names.get(current.type, str(current.type))
+                    ttl = current.ttl if hasattr(current, 'ttl') else 0
+
+                    print(f"  [{count+1}] {rrname} -> {rdata} (Type: {type_str}, TTL: {ttl}s)")
+                    count += 1
+
+                    # Move to next record via payload chain
+                    if hasattr(current, 'payload') and current.payload:
+                        next_layer = current.payload
+                        if hasattr(next_layer, 'rrname') or type(next_layer).__name__ == 'DNSRR':
+                            current = next_layer
+                        else:
+                            break
+                    else:
+                        break
             else:
                 print("No answers found")
         else:
@@ -225,7 +262,7 @@ def curl_like(target_ip, host_domain, path="/", timeout=5):
                 uml.add_event(src, dst, msg)
 
                 # Console Print
-                print(f"  {src}:{pkt[TCP].sport} -> {dst}:{pkt[TCP].dport} [{flags}]")
+                # print(f"  {src}:{pkt[TCP].sport} -> {dst}:{pkt[TCP].dport} [{flags}]")
 
         # Print HTTP Response Payload text
         for pkt in packets:
@@ -335,56 +372,107 @@ def ping_like(target_ip, count=2, timeout=2):
 
 def traceroute_like(target_ip, max_hops=15, timeout=2):
     """
-    Traceroute with ICMP Error Message Analysis
+    Traceroute using UDP packets (like Linux traceroute)
+    More reliable in Docker/NAT environments than ICMP
     """
     print(f"\n[TRACEROUTE] {target_ip}")
+    print(f"Tracing route with UDP packets (max {max_hops} hops)...")
+    print(f"Each packet goes to SAME destination but with DIFFERENT TTL values\n")
 
     try:
-        for ttl in range(1, max_hops + 1):
-            packet = IP(dst=target_ip, ttl=ttl)/ICMP()
-            
-            uml.add_event(uml.local_ip, target_ip, f"ICMP Req (TTL={ttl})")
+        dest_port = 33434  # Standard traceroute starting port
+        reached = False
 
+        for ttl in range(1, max_hops + 1):
+            # KEY POINT: All packets go to same destination (target_ip)
+            # But each has different TTL - routers along path send back ICMP errors
+            packet = IP(dst=target_ip, ttl=ttl)/UDP(dport=dest_port + ttl)
+
+            start_time = time.time()
+
+            uml.add_event(uml.local_ip, "Router", f"UDP Probe TTL={ttl}")
+
+            # Send packet and wait for ICMP Time Exceeded or Port Unreachable
             reply = sr1(packet, timeout=timeout, verbose=0)
 
+            rtt = (time.time() - start_time) * 1000
+
             if reply is None:
-                print(f"{ttl:2d}  * * *")
+                print(f"{ttl:2d}  * * * (Request timeout)")
             else:
                 src_ip = reply[IP].src
-                print(f"{ttl:2d}  {src_ip}")
 
+                # Try to resolve hostname
+                try:
+                    hostname = socket.gethostbyaddr(src_ip)[0]
+                    display_name = f"{hostname}"
+                except:
+                    display_name = src_ip
+
+                print(f"{ttl:2d}  {display_name} ({src_ip})  {rtt:.2f}ms", end="")
+
+                # Analyze ICMP response
                 if reply.haslayer(ICMP):
                     icmp_layer = reply[ICMP]
-                    
-                    if icmp_layer.type == 11: # Time Exceeded
-                        uml.add_event(src_ip, uml.local_ip, f"Time Exceeded (TTL={ttl})")
-                        
-                        # ICMP Time Exceeded 메시지 분석
-                        # 보통 ICMP Error 메시지는 원본 패킷의 헤더를 포함함
-                        print(f"     >>> Packet Analysis: ICMP Type 11 (Time Exceeded)")
-                        if reply.haslayer(IP) and reply[IP].payload:
-                            # ICMP payload 안에 있는 내 원본 패킷 정보 확인
-                            # 구조: IP(응답) / ICMP(에러) / IP(내꺼) / ICMP(내꺼)
-                            inner_layer = reply[IP].payload # ICMP
-                            if hasattr(inner_layer, 'payload') and inner_layer.payload:
-                                original_ip_layer = inner_layer.payload
-                                if isinstance(original_ip_layer, IP):
-                                    print(f"     [Original Packet Info inside Error Message]")
-                                    print(f"     Src: {original_ip_layer.src} -> Dst: {original_ip_layer.dst}")
-                                    print(f"     Original TTL: {original_ip_layer.ttl}")
+                    icmp_type = icmp_layer.type
+                    icmp_code = icmp_layer.code
 
-                    elif icmp_layer.type == 0: # Echo Reply
+                    if icmp_type == 11:  # Time Exceeded
+                        print(f"  [ICMP Type 11: TTL Exceeded]")
+                        uml.add_event(src_ip, uml.local_ip, f"Time Exceeded TTL={ttl}")
+
+                        # Analyze original packet inside ICMP error message
+                        print(f"     >>> Packet Analysis:")
+                        if hasattr(icmp_layer, 'payload') and icmp_layer.payload:
+                            original_ip = icmp_layer.payload
+                            if isinstance(original_ip, IP):
+                                print(f"     [Original Packet] Src: {original_ip.src} -> Dst: {original_ip.dst}, TTL: {original_ip.ttl}")
+                                if original_ip.haslayer(UDP):
+                                    print(f"     [Original UDP] Port: {original_ip[UDP].dport}")
+
+                    elif icmp_type == 3:  # Destination Unreachable
+                        if icmp_code == 3:  # Port Unreachable = destination reached!
+                            print(f"  [ICMP Type 3 Code 3: Port Unreachable - DESTINATION REACHED!]")
+                            uml.add_event(src_ip, uml.local_ip, "Port Unreachable (Reached)")
+                            print(f"     >>> This means we successfully reached the destination server!")
+                            print(f"\n✓ Reached destination in {ttl} hops")
+                            reached = True
+                            break
+                        else:
+                            print(f"  [ICMP Type 3 Code {icmp_code}: Dest Unreachable]")
+                            uml.add_event(src_ip, uml.local_ip, f"Dest Unreachable ({icmp_code})")
+
+                    elif icmp_type == 0:  # Echo Reply (if ICMP was used instead)
+                        print(f"  [ICMP Type 0: Echo Reply - DESTINATION REACHED!]")
                         uml.add_event(src_ip, uml.local_ip, "Echo Reply (Reached)")
-                        print(f"     >>> Packet Analysis: Destination Reached (Type 0)")
-                        print(f"\nReached destination in {ttl} hops")
+                        print(f"\n✓ Reached destination in {ttl} hops")
+                        reached = True
                         break
+                    else:
+                        print(f"  [ICMP Type {icmp_type} Code {icmp_code}]")
+                        uml.add_event(src_ip, uml.local_ip, f"ICMP {icmp_type}/{icmp_code}")
+                else:
+                    print(f"  [Non-ICMP response]")
+                    uml.add_event(src_ip, uml.local_ip, f"Response TTL={ttl}")
+
+        if not reached:
+            print(f"\n⚠ Did not reach destination within {max_hops} hops")
+            print(f"   (This is normal - some servers don't respond to traceroute)")
+
     except Exception as e:
         print(f"✗ Error: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 if __name__ == "__main__":
+    # set WEB_DOMAIN from ARG
+    if len(sys.argv) > 1:
+        WEB_DOMAIN = sys.argv[1]
+    else:
+        WEB_DOMAIN = "google.co.kr"
+    
     # 0. 관리자 권한 체크 및 자동 재실행
-
     if os.geteuid() != 0:
         print("\n" + "="*60)
         print("[알림] 관리자 권한(Root)이 필요합니다.")
@@ -397,19 +485,13 @@ if __name__ == "__main__":
             sys.exit(1)
 
     print("="*60)
-    print("Network Utility Tools (Scapy) - Target: Google")
+    print(f"Network Utility Tools (Scapy) - Target: {WEB_DOMAIN}")
     print("="*60)
 
     # Disable scapy verbose output
     conf.verb = 0
 
-    # set WEB_DOMAIN from ARG
-    if len(sys.argv) > 1:
-        WEB_DOMAIN = sys.argv[1]
-    else:
-        WEB_DOMAIN = "google.co.kr"
-    
- # 도메인 IP 동적 확인 (Resolve)
+    # 도메인 IP 동적 확인 (Resolve)
     try:
         WEB_IP = socket.gethostbyname(WEB_DOMAIN)
         print(f"[*] Resolved {WEB_DOMAIN} to {WEB_IP}")
@@ -439,7 +521,7 @@ if __name__ == "__main__":
     
     # 4. Traceroute
     traceroute_like(WEB_IP, max_hops=15)
-    uml.draw(title="4. Traceroute Sequence")
+    uml.draw(title="4. Traceroute (ICMP/UDP) Sequence")
     uml.clear()
 
     print("\n" + "="*60)

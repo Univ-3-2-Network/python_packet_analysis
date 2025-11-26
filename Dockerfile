@@ -40,4 +40,5 @@ VOLUME ["/app"]
 EXPOSE 22
 
 # Start SSH service and Python application
-CMD service ssh start && python app.py
+CMD service ssh start && python
+# python app.py

@@ -9,14 +9,15 @@ services:
     cap_add:
       - NET_ADMIN
       - NET_RAW
-    # Use host network mode for full network access (optional, but recommended for sniffing)
-    # Uncomment the line below to use host network mode
-    # network_mode: "host"
 
-    # If not using host mode, expose ports manually
-    ports:
-      - "${SSH_PORT}:22"
-      - "${APP_PORT}:${APP_PORT}"
+    # Use host network mode for direct access to host network interfaces
+    network_mode: "host"
+
+    # Note: Port mappings don't work in host mode - container uses host ports directly
+    # SSH will be available on host's port 22, APP_PORT on host's APP_PORT
+    # ports:
+    #   - "${SSH_PORT}:22"
+    #   - "${APP_PORT}:${APP_PORT}"
 
     # Keep container running
     stdin_open: true
@@ -46,3 +47,12 @@ services:
     # Load environment variables from .env file
     env_file:
       - .env
+
+# Custom network not needed when using host network mode
+# networks:
+#   custom_network:
+#     driver: bridge
+#     ipam:
+#       config:
+#         - subnet: 192.168.0.0/16        # Subnet range
+#           gateway: 192.168.1.254           # Gateway IP

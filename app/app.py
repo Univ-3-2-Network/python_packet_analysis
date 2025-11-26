@@ -244,27 +244,72 @@ def curl_like(target_ip, host_domain, path="/", timeout=5):
         packets = sniffer.results
 
         print(f"\n--- Captured {len(packets)} TCP packets ---")
+        print(f"{'#':<3} {'Direction':<40} {'Flags':<10} {'Seq':<12} {'Ack':<12} {'Description':<30}")
+        print("-" * 110)
 
         # Parse packets for UML and Display
+        pkt_num = 0
         for pkt in packets:
             if pkt.haslayer(TCP):
+                pkt_num += 1
                 src = pkt[IP].src
                 dst = pkt[IP].dst
                 flags = pkt[TCP].flags
                 sport = pkt[TCP].sport
                 dport = pkt[TCP].dport
+                seq = pkt[TCP].seq
+                ack = pkt[TCP].ack
 
-                # UML Logging
-                msg = f"TCP :{dport} [{flags}]"
+                # Determine direction and role
+                direction = f"{src}:{sport} -> {dst}:{dport}"
+
+                # Parse TCP flags into readable format
+                flag_str = str(flags)
+                flag_names = []
+                if 'S' in flag_str: flag_names.append("SYN")
+                if 'A' in flag_str: flag_names.append("ACK")
+                if 'F' in flag_str: flag_names.append("FIN")
+                if 'P' in flag_str: flag_names.append("PSH")
+                if 'R' in flag_str: flag_names.append("RST")
+                if 'U' in flag_str: flag_names.append("URG")
+                flag_display = "+".join(flag_names) if flag_names else str(flags)
+
+                # Determine packet description
+                description = ""
                 if pkt.haslayer('Raw'):
                     payload = bytes(pkt['Raw'].load).decode('utf-8', errors='ignore')
-                    if "GET" in payload: msg = f"HTTP GET :{dport}"
-                    if "HTTP/1" in payload: msg = f"HTTP 200 :{sport}"
+                    if "GET" in payload:
+                        description = "HTTP GET Request"
+                    elif "HTTP/1" in payload:
+                        description = "HTTP Response"
+                    else:
+                        description = "Data"
+                else:
+                    if 'S' in flag_str and 'A' not in flag_str:
+                        description = "TCP Handshake (1/3)"
+                    elif 'S' in flag_str and 'A' in flag_str:
+                        description = "TCP Handshake (2/3)"
+                    elif 'A' in flag_str and 'S' not in flag_str and 'F' not in flag_str:
+                        description = "TCP Handshake (3/3)" if pkt_num == 3 else "ACK"
+                    elif 'F' in flag_str:
+                        description = "Connection Close"
+
+                # Console Print - per line with details
+                print(f"{pkt_num:<3} {direction:<40} {flag_display:<10} {seq:<12} {ack:<12} {description:<30}")
+
+                # UML Logging with detailed flags
+                if pkt.haslayer('Raw'):
+                    payload = bytes(pkt['Raw'].load).decode('utf-8', errors='ignore')
+                    if "GET" in payload:
+                        msg = f"HTTP GET :{dport} [PSH+ACK]"
+                    elif "HTTP/1" in payload:
+                        msg = f"HTTP 200 :{sport} [PSH+ACK]"
+                    else:
+                        msg = f"TCP :{dport} [{flag_display}]"
+                else:
+                    msg = f"TCP :{dport} [{flag_display}]"
 
                 uml.add_event(src, dst, msg)
-
-                # Console Print
-                # print(f"  {src}:{pkt[TCP].sport} -> {dst}:{pkt[TCP].dport} [{flags}]")
 
         # Print HTTP Response Payload text
         for pkt in packets:

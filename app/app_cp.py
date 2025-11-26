@@ -4,7 +4,6 @@ Network utility tools using Scapy
 Implements: curl, ping, nslookup, traceroute with packet parsing
 """
 
-import sys
 import socket
 import time
 import threading
@@ -322,30 +321,30 @@ def traceroute_like(host, max_hops=30, timeout=2):
         print(f"✗ Error: {e}")
 
 
-if __name__ == "__main__":
-    import sys
+def main():
+    """
+    Main function to run all network utilities
+    """
+    print("="*60)
+    print("Network Utility Tools (Scapy)")
+    print("="*60)
 
+    # Disable scapy verbose output
     conf.verb = 0
 
-    if len(sys.argv) > 1:
-        target_host = sys.argv[1]
-    else:
-        target_host = "www.google.com"
+    target = "example.com"
 
-    print(f"\n{'='*60}")
-    print(f"Network Utility Tools (Scapy)")
-    print(f"Target Host: {target_host}")
-    print(f"{'='*60}")
+    # Run all utilities
+    # curl_like(target, "/")
+    # ping_like(target, count=4)
+    nslookup_like(target, dns_server="1.1.1.1", timeout=10)
+    # traceroute_like(target, max_hops=15)
 
-    try:
-        nslookup_like(target_host)
-        ping_like(target_host, count = 4)
-        traceroute_like(target_host, max_hops=15)
-        curl_like(target_host)
+    print("\n" + "="*60)
+    print("All tests completed")
+    print("="*60)
 
-        print(f"\n{'='*60}")
-        print("All tests completed")
-        print(f"{'='*60}")
 
-    except KeyboardInterrupt:
-        print("\nProgram Interrupted.")
+if __name__ == "__main__":
+    while 1:
+        main()

@@ -50,3 +50,6 @@ captured_packets/
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude
+CLAUDE.md
